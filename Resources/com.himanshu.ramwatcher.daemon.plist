@@ -5,19 +5,26 @@
     <key>Label</key>
     <string>com.himanshu.ramwatcher.daemon</string>
 
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/libexec/ramwatcher/RAMWatcherDaemon</string>
-    </array>
+    <!-- BundleProgram (not Program/ProgramArguments) is the SMAppService-
+         specific key: it's a path RELATIVE TO THE APP BUNDLE, resolved by
+         the system against the bundle's actual on-disk location at
+         registration time. This is what lets the daemon work no matter
+         where the user drags RAMWatcher.app (not hardcoded to
+         /Applications), and is the whole reason this app no longer needs
+         a separate sudo-run install script: SMAppService.daemon(...).
+         register(), called from the app itself, handles everything that
+         the manual `launchctl bootstrap` + /Library/LaunchDaemons copy
+         used to do. -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/RAMWatcherDaemon</string>
 
-    <!-- Runs as root: needed to read phys_footprint and send signals to
-         processes owned by other users/system daemons (proc_pid_rusage
-         and kill() both return EPERM across UID boundaries for non-root
-         callers). This is the whole reason the daemon exists as a
-         separate privileged component instead of living in the UI app. -->
-    <key>UserName</key>
-    <string>root</string>
-
+    <!-- Still runs as root (the system enforces this for a registered
+         SMAppService daemon regardless of who launched the app) -- needed
+         to read phys_footprint and send signals to processes owned by
+         other users/system daemons (proc_pid_rusage and kill() both
+         return EPERM across UID boundaries for non-root callers). This is
+         the whole reason the daemon is a separate privileged component
+         instead of living in the UI app. -->
     <key>RunAtLoad</key>
     <true/>
 

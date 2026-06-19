@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var daemonInstaller: DaemonInstaller
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,16 +67,8 @@ struct ContentView: View {
 
     private var daemonNotRunningView: some View {
         VStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("RAMWatcher daemon is not running")
-                .font(.headline)
-            Text("Install it with the install script (see Scripts/) and make sure the LaunchDaemon is loaded, then reopen this menu.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            daemonStatusContent
+
             if let connectionError = model.connectionError {
                 Text(connectionError)
                     .font(.caption2)
@@ -85,6 +78,58 @@ struct ContentView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The primary message + action the user should read for the current
+    /// daemon registration state. `connectionError` (shown below this,
+    /// smaller) is supplementary debugging detail, not the headline.
+    @ViewBuilder
+    private var daemonStatusContent: some View {
+        switch daemonInstaller.state {
+        case .requiresApproval:
+            Image(systemName: "checkmark.shield")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("One-time approval needed")
+                .font(.headline)
+            Text("RAMWatcher needs one-time approval to run its background helper.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open System Settings") {
+                daemonInstaller.openSystemSettingsLoginItems()
+            }
+
+        case .registrationFailed(let message):
+            Image(systemName: "exclamationmark.triangle")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("Couldn't start background helper")
+                .font(.headline)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Try Again") {
+                daemonInstaller.register()
+            }
+
+        case .notRegistered, .notFound, .registered:
+            // `.notFound` (SMAppService status 3) is the normal status for
+            // a daemon that's never been registered before -- not
+            // necessarily a packaging bug despite the name. The app
+            // auto-calls register() at launch for both `.notRegistered`
+            // and `.notFound`, so this is a brief transient state, not a
+            // dead end. If registration genuinely can't find the embedded
+            // plist, that surfaces through `.registrationFailed` instead,
+            // since `register()` itself would throw.
+            ProgressView()
+                .controlSize(.small)
+            Text("Starting background helper...")
+                .font(.headline)
+        }
     }
 
     private var emptyStateView: some View {

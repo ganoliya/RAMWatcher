@@ -46,14 +46,19 @@ Activity Monitor's "Memory" column is `phys_footprint`, not resident set size (R
 ## Architecture
 
 ```
-Menu bar app (your user account)  <-- unix socket, JSON -->  RAMWatcherDaemon (root, LaunchDaemon)
+RAMWatcher.app
+├── Contents/MacOS/RAMWatcherApp        (menu bar UI, your user account)
+├── Contents/MacOS/RAMWatcherDaemon     (embedded daemon, runs as root)
+└── Contents/Library/LaunchDaemons/com.himanshu.ramwatcher.daemon.plist
 ```
 
-Reading another user's or a system process's memory, and sending it a kill signal, both require root (`proc_pid_rusage`/`kill()` return EPERM across UID boundaries otherwise). So the daemon — not the UI — does the privileged sampling and the killing; the menu bar app is a thin display/control client. This is also why "hide system processes" only hides them from the *view* — the daemon still has to read them to give you the choice.
+Reading another user's or a system process's memory, and sending it a kill signal, both require root (`proc_pid_rusage`/`kill()` return EPERM across UID boundaries otherwise). So the daemon — not the UI — does the privileged sampling and the killing; the menu bar app is a thin display/control client talking to it over a Unix socket. This is also why "hide system processes" only hides them from the *view* — the daemon still has to read them to give you the choice.
+
+The daemon ships **inside** the app bundle and registers itself at launch via Apple's `SMAppService` API (ServiceManagement framework, macOS 13+) — the modern replacement for manually installing a LaunchDaemon via a sudo script. The only user-facing step is a one-time consent click in **System Settings → General → Login Items & Extensions → Allow in the Background**; no admin password is ever typed. This requires the app to be signed with a real Apple Developer ID (ad-hoc signing is enough to run locally, but `SMAppService.register()` will not work without a Developer ID signature).
 
 - `Sources/RAMWatcherCore` — process sampling (libproc/Darwin), app grouping (PPID tree + bundle-path fallback for launchd-reparented XPC helpers), the kill blocklist, and the JSON wire protocol shared by both executables.
-- `Sources/RAMWatcherDaemon` — root LaunchDaemon: samples every 1.5s, serves snapshots and kill requests over a Unix domain socket at `/var/run/ramwatcher.sock`.
-- `Sources/RAMWatcherApp` — SwiftUI menu-bar UI (`MenuBarExtra`), polls the daemon every 2s, filter/search/expand/kill controls.
+- `Sources/RAMWatcherDaemon` — the embedded root daemon: samples every 1.5s, serves snapshots and kill requests over a Unix domain socket at `/var/run/ramwatcher.sock`.
+- `Sources/RAMWatcherApp` — SwiftUI menu-bar UI (`MenuBarExtra`), polls the daemon every 2s, filter/search/expand/kill controls, and `DaemonInstaller.swift` which drives `SMAppService` registration.
 
 ## Grouping limitation (real, not hand-waved)
 
@@ -75,29 +80,30 @@ The daemon resamples all processes every **1.5s**; the menu bar app polls the da
 ```bash
 git clone https://github.com/ganoliya/RAMWatcher.git
 cd RAMWatcher
-./Scripts/build_app.sh                          # no sudo — builds dist/RAMWatcher.app and dist/RAMWatcherDaemon
-cp -R dist/RAMWatcher.app /Applications/RAMWatcher.app   # so macOS registers it as a normal launchable app
-open /Applications/RAMWatcher.app               # menu bar icon appears; shows "daemon not running" until the next step
-
-sudo ./Scripts/install_daemon.sh    # the one privileged step — installs + starts the LaunchDaemon
+./Scripts/build_app.sh                                    # builds dist/RAMWatcher.app
+cp -R dist/RAMWatcher.app /Applications/RAMWatcher.app
+open /Applications/RAMWatcher.app
 ```
 
-To remove the daemon later: `sudo ./Scripts/uninstall_daemon.sh`.
+That's it — there is no separate privileged install step. On first launch the app registers its embedded daemon automatically; macOS will prompt you once to approve it in **System Settings → General → Login Items & Extensions → Allow in the Background**.
 
-Both the app and the daemon are ad-hoc signed (`codesign --sign -`) — fine for running on this Mac, since this isn't being distributed or notarized.
+`build_app.sh` auto-detects a `Developer ID Application` signing identity in your keychain and uses it (with the hardened runtime, required for `SMAppService` and for notarization). Without one, it falls back to ad-hoc signing — the app still runs locally, but daemon registration will not succeed without a real Developer ID, since `SMAppService` requires it.
 
-**After changing daemon code**, `build_app.sh` only rebuilds the local `dist/` artifact — you must re-run `sudo ./Scripts/install_daemon.sh` to replace the installed binary, since it copies into `/usr/local/libexec/ramwatcher/`.
+To remove RAMWatcher: delete `RAMWatcher.app` from `/Applications`. (`Scripts/uninstall_daemon.sh` is legacy cleanup only — for anyone who installed a pre-SMAppService version that used a manually-installed LaunchDaemon.)
+
+**Not yet done:** notarization and a `.dmg` for distribution outside this machine. The app is currently signed but not notarized, so Gatekeeper will warn on a machine that downloaded it (no warning on a machine that built it locally, since there's no quarantine flag).
 
 ## Status
 
-All 5 planned phases are implemented, build cleanly (`swift build`), and have been run end-to-end on this Mac with the LaunchDaemon actually installed as root (not just component-tested):
-1. Sampler/grouping/blocklist validated against Activity Monitor (phys_footprint match, see above) and against a non-root EPERM check.
-2. Privileged daemon with Unix socket protocol: snapshot fetch, blocked/permitted/no-such-process kill outcomes, SIGPIPE survival, clean shutdown — all tested manually, then confirmed running for real as a LaunchDaemon.
-3. SwiftUI menu bar UI: live RAM total, sortable/searchable/filterable grouped list, expandable subprocess tree, per-group and per-process kill with confirmation dialogs, friendly "daemon not running" state — confirmed via screenshot from the actual running app.
-4. Kill guardrails (blocklist) enforced server-side.
-5. Build/install/uninstall scripts; this README.
+All 5 originally planned phases are implemented and build cleanly (`swift build`). Since then, the daemon installation mechanism was rewritten from a manual sudo-run LaunchDaemon install to a self-registering `SMAppService` daemon embedded in the app bundle, now that a real Apple Developer ID is available for signing:
 
-Known gap: no automated GUI test harness exists for the SwiftUI interactions (expand/search/kill flows) — those were verified by reasoning over the code plus one direct screenshot of the daemon-not-running state, not a full click-through of every control.
+1. Sampler/grouping/blocklist validated against Activity Monitor (phys_footprint match, see above) and against a non-root EPERM check.
+2. Daemon with Unix socket protocol: snapshot fetch, blocked/permitted/no-such-process kill outcomes, SIGPIPE survival, clean shutdown — tested manually, then confirmed running for real, first as a manually-installed LaunchDaemon and now via `SMAppService`.
+3. SwiftUI menu bar UI: live RAM total, sortable/searchable/filterable grouped list, expandable subprocess tree, per-group and per-process kill with confirmation dialogs, daemon-registration-aware status UI (pending approval / starting / failed states).
+4. Kill guardrails (blocklist) enforced server-side.
+5. Build script (now embeds + Developer ID signs in one step); this README; [CHANGELOG.md](CHANGELOG.md).
+
+Known gap: no automated GUI test harness exists for the SwiftUI interactions (expand/search/kill flows) — those were verified by reasoning over the code, direct inspection of the code signature and the macOS Background Task Management database (`sfltool dumpbtm`), and system log output, rather than a full click-through of every control.
 
 ## License
 
