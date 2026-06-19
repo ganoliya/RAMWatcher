@@ -4,6 +4,8 @@ All notable changes to RAMWatcher are documented here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-19
+
 ### Changed
 - **Daemon installation rewritten to self-register via `SMAppService`.** The privileged background daemon now ships embedded inside `RAMWatcher.app` (`Contents/MacOS/RAMWatcherDaemon` + `Contents/Library/LaunchDaemons/com.himanshu.ramwatcher.daemon.plist`, the latter using the `BundleProgram` key so the path resolves correctly regardless of where the app is installed) and registers itself automatically at launch via Apple's `ServiceManagement` framework. The only user action is a one-time approval in System Settings → General → Login Items & Extensions — no sudo password needed. This replaces the previous flow, which required running `sudo ./Scripts/install_daemon.sh` manually. Requires the app to be signed with a real Apple Developer ID; ad-hoc signed builds run locally but cannot register the daemon.
 - `Scripts/build_app.sh` now auto-detects a `Developer ID Application` identity in the keychain, signs both the embedded daemon and the outer app bundle with the hardened runtime (inside-out: daemon first, then the bundle), and embeds the daemon directly — it no longer produces a separate standalone daemon binary for manual install.
