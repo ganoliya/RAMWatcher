@@ -1,5 +1,10 @@
 #!/bin/bash
-# Stops and removes the RAMWatcher LaunchDaemon. Requires sudo.
+# LEGACY CLEANUP ONLY. As of the SMAppService rewrite, RAMWatcher no
+# longer manually installs a LaunchDaemon -- the daemon ships inside the
+# app bundle and self-registers. This script exists only to remove a
+# daemon installed by an OLD version of RAMWatcher (the one that required
+# `sudo ./Scripts/install_daemon.sh`). To remove a current install, just
+# delete RAMWatcher.app from /Applications.
 #
 #   sudo ./Scripts/uninstall_daemon.sh
 set -euo pipefail
