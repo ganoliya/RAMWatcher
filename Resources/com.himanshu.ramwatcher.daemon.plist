@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.himanshu.ramwatcher.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/ramwatcher/RAMWatcherDaemon</string>
+    </array>
+
+    <!-- Runs as root: needed to read phys_footprint and send signals to
+         processes owned by other users/system daemons (proc_pid_rusage
+         and kill() both return EPERM across UID boundaries for non-root
+         callers). This is the whole reason the daemon exists as a
+         separate privileged component instead of living in the UI app. -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/ramwatcher-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/ramwatcher-daemon.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
