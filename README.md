@@ -2,15 +2,32 @@
 
 A menu-bar RAM usage monitor for macOS — built because Activity Monitor doesn't group subprocess memory under the parent app, and because tools that don't use the same memory metric as Activity Monitor produce numbers that just don't agree with it.
 
-## Problem statement
+## In plain English
 
-Activity Monitor's Memory tab has two practical gaps:
-1. **No combined view per app.** A single app like Chrome shows up as a dozen-plus unrelated rows (`Google Chrome`, `Google Chrome Helper`, `Google Chrome Helper (Renderer)` ×N, `Google Chrome Helper (GPU)`, ...) with no total. To find out how much RAM "Chrome" is actually using, you have to manually find and add up every helper row yourself.
-2. **No way to act on what you find.** Activity Monitor can show you the offender, but terminating it (especially a system process) requires the separate Force Quit dialog, and there's no quick filter to just look at your own apps versus the OS's background processes.
+Your Mac has a fixed amount of memory, and when it fills up, everything slows down: apps stutter, you get the spinning beachball, the fan kicks in. macOS already has a tool to show you what's using all that memory — Activity Monitor — but it was built for engineers, not for a quick glance. It lists dozens of cryptically-named background helper processes as separate, unconnected rows, so even though it's *technically* showing you the answer, you can't actually see it without doing manual detective work first.
 
-A correct fix also has to get one detail right that's easy to get wrong: Activity Monitor's "Memory" column is `phys_footprint`, not resident set size (RSS). A tool that reads RSS instead will produce numbers that visibly disagree with Activity Monitor for the same process — looking "off" even if the rest of the logic is sound.
+RAMWatcher sits quietly in your menu bar and answers the question Activity Monitor won't: "which app is actually using my RAM, and can I just close it?" — one row per app you recognize, with a button to quit it right there.
 
-## Solution
+## The problem
+
+Open Activity Monitor on a Mac that's running hot and sort by memory. For one single app — say, Chrome with a bunch of tabs open — you won't see one number. You'll see something like this:
+
+```
+Google Chrome                       276 MB
+Google Chrome Helper                344 MB
+Google Chrome Helper (Renderer)     556 MB
+Google Chrome Helper (Renderer)     434 MB
+Google Chrome Helper (Renderer)     181 MB
+... 15 more rows, same app
+```
+
+That's a real capture from this machine — 20 separate rows, all of them Chrome, adding up to over **2 GB**, and Activity Monitor never tells you that. It just shows you the rows. To answer "how much RAM is Chrome actually using," you have to recognize that a dozen-plus oddly-named processes are secretly the same app, then add them up yourself, by hand, every time. Do that across Slack, VS Code, your browser, and every other app built on Electron or Chromium, and "what's eating my memory" stops being a five-second glance and turns into a small research project.
+
+And once you've found the actual offender, Activity Monitor's only response is a separate Force Quit window, with no quick way to filter out the 80+ system processes you'll never care about and look at just your own apps.
+
+A correct fix also has to get one technical detail right that's easy to get subtly wrong: Activity Monitor's "Memory" column is `phys_footprint`, not resident set size (RSS) — the more commonly-used metric. A tool that reads RSS instead will produce numbers that visibly disagree with Activity Monitor for the exact same process, undermining trust in the tool even if everything else about it is correct.
+
+## The solution
 
 RAMWatcher is a menu-bar app + a small privileged background daemon that:
 - **Groups subprocesses under their parent app** and shows one combined memory total per app, using a PPID-tree walk (catches helpers that stay child processes, e.g. Chrome/Electron renderers) plus a bundle-path fallback (catches XPC services that launchd reparents away from their app).
