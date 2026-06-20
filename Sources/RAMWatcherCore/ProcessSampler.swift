@@ -89,7 +89,17 @@ public struct ProcessSampler {
             }
             guard actualBytes > 0 else { return [] }
 
-            let count = Int(actualBytes) / MemoryLayout<Int32>.size
+            // Despite the documented "returns bytes" contract, empirically
+            // (verified against `ps` on macOS 15/Sequoia) this call returns
+            // a PID count here, both with a NULL buffer and with a real
+            // one -- dividing by sizeof(Int32) was silently keeping only
+            // ~1/4 of all running processes, which is why some apps'
+            // process trees (e.g. Chrome, with PIDs the truncated buffer
+            // never reached) were sampled incompletely, leading to
+            // partial/broken kills. The buffersize argument itself is
+            // still a byte count -- only the *return value*'s unit was
+            // wrong here.
+            let count = Int(actualBytes)
             if count <= buffer.count {
                 return Array(buffer.prefix(count)).filter { $0 > 0 }
             }
