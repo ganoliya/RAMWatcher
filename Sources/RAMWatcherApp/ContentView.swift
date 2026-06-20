@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var daemonInstaller: DaemonInstaller
+    @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
         ZStack {
@@ -44,15 +45,31 @@ struct ContentView: View {
             }
         }
         .frame(width: 380, height: 480)
+        .onAppear {
+            isSearchFieldFocused = true
+        }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(menuBarSummary)
-                .font(.headline)
+            HStack(alignment: .top) {
+                Text(menuBarSummary)
+                    .font(.headline)
+
+                Spacer()
+
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Image(systemName: "power")
+                }
+                .buttonStyle(.borderless)
+                .help("Quit RAMWatcher")
+            }
 
             TextField("Search", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
+                .focused($isSearchFieldFocused)
 
             Picker("Filter", selection: $model.filter) {
                 ForEach(ProcessFilter.allCases, id: \.self) { filter in
