@@ -15,23 +15,12 @@ struct GroupRow: View {
     let group: ProcessGroup
 
     @State private var isExpanded = false
-    @State private var pendingConfirmation: PendingKill?
-
-    private struct PendingKill: Identifiable {
-        enum Target {
-            case group(ProcessGroup)
-            case process(RAMWatcherCore.ProcessInfo)
-        }
-        let id = UUID()
-        let target: Target
-        let signal: KillSignal
-    }
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             ForEach(group.members) { member in
                 MemberRow(member: member, isProtectedGroup: group.isProtected) { signal in
-                    pendingConfirmation = PendingKill(target: .process(member), signal: signal)
+                    model.pendingConfirmation = PendingKill(target: .process(member), signal: signal)
                 }
             }
         } label: {
@@ -63,25 +52,6 @@ struct GroupRow: View {
                 killControls
             }
         }
-        .confirmationDialog(
-            confirmationTitle,
-            isPresented: Binding(
-                get: { pendingConfirmation != nil },
-                set: { if !$0 { pendingConfirmation = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let pending = pendingConfirmation {
-                Button(confirmButtonLabel(for: pending), role: .destructive) {
-                    Task { await performKill(pending) }
-                }
-                Button("Cancel", role: .cancel) {}
-            }
-        } message: {
-            if let pending = pendingConfirmation {
-                Text(confirmationMessage(for: pending))
-            }
-        }
     }
 
     @ViewBuilder
@@ -92,14 +62,14 @@ struct GroupRow: View {
                 .help("Protected system process — cannot be terminated")
         } else {
             Button("Quit") {
-                pendingConfirmation = PendingKill(target: .group(group), signal: .terminate)
+                model.pendingConfirmation = PendingKill(target: .group(group), signal: .terminate)
             }
             .buttonStyle(.borderless)
             .help("Quit all \(group.members.count) process(es) in '\(group.displayName)' (SIGTERM)")
 
             Menu {
                 Button("Force Quit") {
-                    pendingConfirmation = PendingKill(target: .group(group), signal: .kill)
+                    model.pendingConfirmation = PendingKill(target: .group(group), signal: .kill)
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -107,34 +77,6 @@ struct GroupRow: View {
             .menuStyle(.borderlessButton)
             .frame(width: 20)
             .help("More actions")
-        }
-    }
-
-    private var confirmationTitle: String {
-        "Confirm Action"
-    }
-
-    private func confirmButtonLabel(for pending: PendingKill) -> String {
-        pending.signal == .terminate ? "Quit" : "Force Quit"
-    }
-
-    private func confirmationMessage(for pending: PendingKill) -> String {
-        switch pending.target {
-        case .group(let group):
-            let verb = pending.signal == .terminate ? "Quit" : "Force quit"
-            return "\(verb) '\(group.displayName)' and its \(group.members.count) process\(group.members.count == 1 ? "" : "es")?"
-        case .process(let proc):
-            let verb = pending.signal == .terminate ? "Quit" : "Force quit"
-            return "\(verb) process '\(proc.name)' (pid \(proc.pid))?"
-        }
-    }
-
-    private func performKill(_ pending: PendingKill) async {
-        switch pending.target {
-        case .group(let group):
-            await model.killGroup(group, signal: pending.signal)
-        case .process(let proc):
-            await model.killProcess(proc, signal: pending.signal)
         }
     }
 }
