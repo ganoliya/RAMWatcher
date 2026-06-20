@@ -45,6 +45,14 @@ struct PendingKill: Identifiable {
 final class AppModel: ObservableObject {
     @Published var snapshot: Snapshot?
     @Published var connectionError: String?
+    /// When `connectionError` first became non-nil, so the UI can tell a
+    /// brief "still starting up" blip from a daemon that's genuinely stuck
+    /// (e.g. registered with launchd but not actually listening on its
+    /// socket -- which happens after a daemon-side code change, since
+    /// re-registering an already-registered `SMAppService` daemon does not
+    /// restart its already-running process). `nil` whenever the daemon is
+    /// reachable.
+    @Published private(set) var connectionErrorSince: Date?
     @Published var filter: ProcessFilter = .all
     @Published var searchText: String = ""
     @Published var lastActionMessage: String?
@@ -138,8 +146,12 @@ final class AppModel: ObservableObject {
             let snapshot = try await client.fetchSnapshot()
             self.snapshot = snapshot
             self.connectionError = nil
+            self.connectionErrorSince = nil
         } catch {
             self.connectionError = error.localizedDescription
+            if connectionErrorSince == nil {
+                connectionErrorSince = Date()
+            }
         }
     }
 
