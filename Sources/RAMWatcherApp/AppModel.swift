@@ -53,7 +53,7 @@ final class AppModel: ObservableObject {
     /// restart its already-running process). `nil` whenever the daemon is
     /// reachable.
     @Published private(set) var connectionErrorSince: Date?
-    @Published var filter: ProcessFilter = .all
+    @Published var filter: ProcessFilter = .userOnly
     @Published var searchText: String = ""
     @Published var lastActionMessage: String?
     /// The kill action currently awaiting user confirmation, rendered by

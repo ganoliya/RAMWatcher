@@ -18,7 +18,7 @@ struct GroupRow: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
-            ForEach(group.members) { member in
+            ForEach(group.members.sorted { $0.physFootprintBytes > $1.physFootprintBytes }) { member in
                 MemberRow(member: member, isProtectedGroup: group.isProtected) { signal in
                     model.pendingConfirmation = PendingKill(target: .process(member), signal: signal)
                 }
