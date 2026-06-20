@@ -6,29 +6,40 @@ struct ContentView: View {
     @EnvironmentObject private var daemonInstaller: DaemonInstaller
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        ZStack {
+            VStack(spacing: 0) {
+                header
 
-            if let lastActionMessage = model.lastActionMessage {
-                Text(lastActionMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.1))
-                    .transition(.opacity)
-                    .animation(.default, value: model.lastActionMessage)
+                if let lastActionMessage = model.lastActionMessage {
+                    Text(lastActionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.1))
+                        .transition(.opacity)
+                        .animation(.default, value: model.lastActionMessage)
+                }
+
+                Divider()
+
+                if model.connectionError != nil {
+                    daemonNotRunningView
+                } else if model.filteredGroups.isEmpty {
+                    emptyStateView
+                } else {
+                    processList
+                }
             }
 
-            Divider()
-
-            if model.connectionError != nil {
-                daemonNotRunningView
-            } else if model.filteredGroups.isEmpty {
-                emptyStateView
-            } else {
-                processList
+            // Rendered as a plain overlay (not a system .confirmationDialog/
+            // .alert) because MenuBarExtra(.window) dismisses its whole
+            // popover the instant a system-presented sheet takes key
+            // status -- which swallows the button tap before its action
+            // ever fires. See `AppModel.pendingConfirmation`.
+            if let pending = model.pendingConfirmation {
+                ConfirmationOverlay(pending: pending)
             }
         }
         .frame(width: 380, height: 480)

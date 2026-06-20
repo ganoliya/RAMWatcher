@@ -8,6 +8,36 @@ enum ProcessFilter: String, CaseIterable {
     case systemOnly = "System Only"
 }
 
+/// A kill action awaiting user confirmation. Lives on `AppModel` (rather
+/// than as row-local `@State`) so the confirmation card can be rendered
+/// once at the top of `ContentView`, above the `List` -- see the note on
+/// `AppModel.pendingConfirmation` for why this can't be a system
+/// `.confirmationDialog`/`.alert` instead.
+struct PendingKill: Identifiable {
+    enum Target {
+        case group(ProcessGroup)
+        case process(RAMWatcherCore.ProcessInfo)
+    }
+    let id = UUID()
+    let target: Target
+    let signal: KillSignal
+
+    var confirmButtonLabel: String {
+        signal == .terminate ? "Quit" : "Force Quit"
+    }
+
+    var message: String {
+        switch target {
+        case .group(let group):
+            let verb = signal == .terminate ? "Quit" : "Force quit"
+            return "\(verb) '\(group.displayName)' and its \(group.members.count) process\(group.members.count == 1 ? "" : "es")?"
+        case .process(let proc):
+            let verb = signal == .terminate ? "Quit" : "Force quit"
+            return "\(verb) process '\(proc.name)' (pid \(proc.pid))?"
+        }
+    }
+}
+
 /// Main observable state for the menu bar UI. Owns the daemon connection
 /// and polls it on a fixed cadence, exposing the latest snapshot plus
 /// derived/filterable views over it to SwiftUI.
@@ -18,6 +48,19 @@ final class AppModel: ObservableObject {
     @Published var filter: ProcessFilter = .all
     @Published var searchText: String = ""
     @Published var lastActionMessage: String?
+    /// The kill action currently awaiting user confirmation, rendered by
+    /// `ContentView` as a custom overlay card.
+    ///
+    /// This deliberately does NOT use a system `.confirmationDialog`/
+    /// `.alert`: those present as a separate key window, and
+    /// `MenuBarExtra(.window)` auto-dismisses its popover the instant it
+    /// loses key status. The result (confirmed empirically): the dialog
+    /// shows, but tapping its button just closes the whole popover before
+    /// the tap is delivered to the button's action -- so the kill never
+    /// fires and reopening the popover shows the same dialog still
+    /// pending. A plain SwiftUI overlay in the same view hierarchy has no
+    /// window/key-status transition to trigger that dismissal.
+    @Published var pendingConfirmation: PendingKill?
 
     private let client: DaemonClient
     private var pollTask: Task<Void, Never>?
@@ -107,7 +150,24 @@ final class AppModel: ObservableObject {
         await refreshOnce()
     }
 
-    func killGroup(_ group: ProcessGroup, signal: KillSignal) async {
+    /// Cancels the pending confirmation without performing the kill.
+    func cancelPendingKill() {
+        pendingConfirmation = nil
+    }
+
+    /// Performs whichever kill is currently pending, then clears it.
+    func confirmPendingKill() async {
+        guard let pending = pendingConfirmation else { return }
+        pendingConfirmation = nil
+        switch pending.target {
+        case .group(let group):
+            await killGroup(group, signal: pending.signal)
+        case .process(let proc):
+            await killProcess(proc, signal: pending.signal)
+        }
+    }
+
+    private func killGroup(_ group: ProcessGroup, signal: KillSignal) async {
         do {
             let (outcome, message) = try await client.killGroup(mainPID: group.mainPID, signal: signal)
             showActionMessage(describeOutcome(outcome, message: message, target: group.displayName))
@@ -117,7 +177,7 @@ final class AppModel: ObservableObject {
         await refreshNow()
     }
 
-    func killProcess(_ proc: RAMWatcherCore.ProcessInfo, signal: KillSignal) async {
+    private func killProcess(_ proc: RAMWatcherCore.ProcessInfo, signal: KillSignal) async {
         do {
             let (outcome, message) = try await client.kill(pid: proc.pid, signal: signal)
             showActionMessage(describeOutcome(outcome, message: message, target: proc.name))
