@@ -1,3 +1,4 @@
+import AppKit
 import RAMWatcherCore
 import SwiftUI
 
@@ -127,6 +128,25 @@ struct ContentView: View {
                 daemonInstaller.register()
             }
 
+        case .registered where isStuckDespiteBeingRegistered:
+            // SMAppService says the daemon is registered, but we've been
+            // unable to reach it over the socket for a while. Calling
+            // `register()` again here would be a no-op -- re-registering
+            // an already-registered daemon does NOT restart its
+            // already-running process, e.g. after a daemon-side code
+            // update is installed but the old process is still alive (or
+            // it crashed/hung). The only fix is a privileged restart,
+            // which needs the user's own terminal since it requires sudo.
+            Image(systemName: "terminal")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("Background helper isn't responding")
+                .font(.headline)
+            Text("Run this in Terminal to restart it:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            daemonRestartCommandBox
+
         case .notRegistered, .notFound, .registered:
             // `.notFound` (SMAppService status 3) is the normal status for
             // a daemon that's never been registered before -- not
@@ -141,6 +161,39 @@ struct ContentView: View {
             Text("Starting background helper...")
                 .font(.headline)
         }
+    }
+
+    /// Gives a freshly-registered daemon a few seconds to actually start
+    /// listening on its socket before treating the connection failure as
+    /// "stuck" rather than "just starting up".
+    private var isStuckDespiteBeingRegistered: Bool {
+        guard let since = model.connectionErrorSince else { return false }
+        return Date().timeIntervalSince(since) > 6
+    }
+
+    private let daemonRestartCommand = "sudo launchctl kickstart -k system/com.himanshu.ramwatcher.daemon"
+
+    private var daemonRestartCommandBox: some View {
+        HStack {
+            Text(daemonRestartCommand)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Button {
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(daemonRestartCommand, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy command")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.secondary.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private var emptyStateView: some View {
