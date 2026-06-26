@@ -40,6 +40,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+private struct MenuBarLabel: View {
+    let fraction: Double?
+
+    var body: some View {
+        Image(nsImage: makeImage())
+    }
+
+    private func makeImage() -> NSImage {
+        let topFont    = NSFont.systemFont(ofSize: 7, weight: .regular)
+        let bottomFont = NSFont.systemFont(ofSize: 11, weight: .bold)
+        let gap: CGFloat = -1.04
+
+        let top = NSAttributedString(
+            string: "RAM",
+            attributes: [.font: topFont]
+        )
+        let bottom = NSAttributedString(
+            string: fraction.map { String(format: "%.0f%%", $0 * 100) } ?? "--",
+            attributes: [.font: bottomFont]
+        )
+
+        // ascender - descender = visible glyph height (omits leading, so lines pack tightly)
+        let topGlyphH    = topFont.ascender    - topFont.descender
+        let bottomGlyphH = bottomFont.ascender - bottomFont.descender
+        let contentH     = topGlyphH + gap + bottomGlyphH
+
+        let menuBarH: CGFloat = 22
+        // In flipped: true (y=0 at top), draw(at:) places the upper-left of the
+        // bounding box at the given point — NOT the baseline. So vOffset is the
+        // top-left y of "RAM", and the percentage starts immediately below it.
+        let vOffset = (menuBarH - contentH) / 2
+
+        let w = ceil(max(top.size().width, bottom.size().width)) + 2
+
+        let image = NSImage(size: NSSize(width: w, height: menuBarH), flipped: true) { _ in
+            top.draw(at: NSPoint(x: 0, y: vOffset))
+            bottom.draw(at: NSPoint(x: 0, y: vOffset + topGlyphH + gap))
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+}
+
 @main
 struct RAMWatcherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -51,21 +95,8 @@ struct RAMWatcherApp: App {
                 .environmentObject(model)
                 .environmentObject(appDelegate.daemonInstaller)
         } label: {
-            Text(menuBarTitle)
+            MenuBarLabel(fraction: model.snapshot != nil ? model.systemUsedFraction : nil)
         }
         .menuBarExtraStyle(.window)
-    }
-
-    /// "RAM: 86%" -- real system-wide memory pressure (active + wired +
-    /// compressed / total), matching Activity Monitor's gauge and what
-    /// Stats-style menu bar tools show. Deliberately not the per-app
-    /// footprint sum, which excludes wired/kernel/GPU memory and reads
-    /// much lower than actual pressure. Falls back to a placeholder while
-    /// no snapshot has loaded yet (or the daemon isn't running).
-    private var menuBarTitle: String {
-        guard model.snapshot != nil else {
-            return "RAM: --"
-        }
-        return String(format: "RAM: %.0f%%", model.systemUsedFraction * 100)
     }
 }
