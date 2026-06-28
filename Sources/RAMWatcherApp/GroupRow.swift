@@ -93,6 +93,14 @@ private struct MemberRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(member.name)
                     .font(.caption)
+                if let scriptPath = member.scriptPath,
+                   !URL(fileURLWithPath: scriptPath).pathExtension.isEmpty || scriptPath.hasPrefix("-m ") {
+                    Text(scriptPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(nil)
+                }
                 Text("pid \(member.pid)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)

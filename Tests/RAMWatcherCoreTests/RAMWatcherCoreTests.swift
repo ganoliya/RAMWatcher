@@ -35,4 +35,35 @@ final class RAMWatcherCoreTests: XCTestCase {
         XCTAssertEqual(groups.count, 1)
         XCTAssertEqual(groups.first?.totalFootprintBytes, 1_250_000)
     }
+
+    func testGroupingViaResponsiblePID() {
+        let cursor = ProcessInfo(pid: 300, ppid: 1, uid: 501, name: "Cursor",
+                                  execPath: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                                  physFootprintBytes: 2_000_000, isUserOwned: true)
+        let python = ProcessInfo(pid: 301, ppid: 1, uid: 501, name: "python3.11",
+                                  execPath: "/usr/local/bin/python3.11",
+                                  physFootprintBytes: 500_000, isUserOwned: true,
+                                  responsiblePID: 300, scriptPath: nil)
+        let groups = ProcessGrouper().group([cursor, python])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.mainPID, 300)
+        XCTAssertEqual(groups.first?.totalFootprintBytes, 2_500_000)
+        XCTAssertEqual(groups.first?.members.count, 2)
+    }
+
+    func testGroupingViaScriptPathBundleFallback() {
+        let cursor = ProcessInfo(pid: 400, ppid: 1, uid: 501, name: "Cursor",
+                                  execPath: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                                  physFootprintBytes: 2_000_000, isUserOwned: true)
+        let python = ProcessInfo(pid: 401, ppid: 1, uid: 501, name: "python3.11",
+                                  execPath: "/usr/local/bin/python3.11",
+                                  physFootprintBytes: 500_000, isUserOwned: true,
+                                  responsiblePID: nil,
+                                  scriptPath: "/Applications/Cursor.app/Contents/Resources/app/extensions/some_script.py")
+        let groups = ProcessGrouper().group([cursor, python])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.mainPID, 400)
+        XCTAssertEqual(groups.first?.totalFootprintBytes, 2_500_000)
+        XCTAssertEqual(groups.first?.members.count, 2)
+    }
 }

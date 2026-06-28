@@ -12,8 +12,10 @@ public struct ProcessInfo: Codable, Identifiable, Hashable, Sendable {
     public let execPath: String?
     public let physFootprintBytes: UInt64
     public let isUserOwned: Bool
+    public let responsiblePID: Int32?
+    public let scriptPath: String?
 
-    public init(pid: Int32, ppid: Int32, uid: UInt32, name: String, execPath: String?, physFootprintBytes: UInt64, isUserOwned: Bool) {
+    public init(pid: Int32, ppid: Int32, uid: UInt32, name: String, execPath: String?, physFootprintBytes: UInt64, isUserOwned: Bool, responsiblePID: Int32? = nil, scriptPath: String? = nil) {
         self.pid = pid
         self.ppid = ppid
         self.uid = uid
@@ -21,6 +23,8 @@ public struct ProcessInfo: Codable, Identifiable, Hashable, Sendable {
         self.execPath = execPath
         self.physFootprintBytes = physFootprintBytes
         self.isUserOwned = isUserOwned
+        self.responsiblePID = responsiblePID
+        self.scriptPath = scriptPath
     }
 }
 

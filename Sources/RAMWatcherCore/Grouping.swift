@@ -56,6 +56,21 @@ public struct ProcessGrouper {
             topLevelPID[p.pid] = findTopLevelAncestor(for: p.pid, byPID: byPID)
         }
 
+        // Step 1.5: Responsible-PID grouping
+        for p in processes {
+            if let respPID = p.responsiblePID, byPID[respPID] != nil {
+                let pTop = topLevelPID[p.pid] ?? p.pid
+                let respTop = topLevelPID[respPID] ?? respPID
+                if pTop != respTop {
+                    for (k, v) in topLevelPID {
+                        if v == pTop {
+                            topLevelPID[k] = respTop
+                        }
+                    }
+                }
+            }
+        }
+
         // Initial grouping by top-level ancestor pid.
         var membersByMain: [Int32: [Int32]] = [:]
         for p in processes {
@@ -108,6 +123,40 @@ public struct ProcessGrouper {
             }
         }
 
+        // Step 2.5: Script-path bundle fallback sub-pass
+        for main in mainsInOrder {
+            guard let memberPIDs = membersByMain[main] else { continue }
+
+            var hasExistingBundle = false
+            for pid in memberPIDs {
+                if let proc = byPID[pid], bundlePath(from: proc.execPath) != nil {
+                    hasExistingBundle = true
+                    break
+                }
+            }
+            if hasExistingBundle { continue }
+
+            var scriptBundlePath: String?
+            for pid in memberPIDs {
+                if let proc = byPID[pid], let sp = proc.scriptPath, let bp = bundlePath(from: sp) {
+                    scriptBundlePath = bp
+                    break
+                }
+            }
+
+            guard let bp = scriptBundlePath else { continue }
+
+            if let existingMain = mainPIDForBundle[bp] {
+                let canonicalExisting = resolve(existingMain)
+                let canonicalCurrent = resolve(main)
+                if canonicalExisting != canonicalCurrent {
+                    redirect[canonicalCurrent] = canonicalExisting
+                }
+            } else {
+                mainPIDForBundle[bp] = main
+            }
+        }
+
         // Apply redirects to build final member lists per canonical main pid.
         var finalMembers: [Int32: [Int32]] = [:]
         for (main, memberPIDs) in membersByMain {
@@ -125,7 +174,10 @@ public struct ProcessGrouper {
             let totalFootprint = members.reduce(UInt64(0)) { $0 + $1.physFootprintBytes }
             let resolvedBundlePath = bundlePath(from: mainProc.execPath)
                 ?? members.lazy.compactMap { bundlePath(from: $0.execPath) }.first
-            let displayName = productName(fromBundlePath: resolvedBundlePath) ?? mainProc.name
+                ?? members.lazy.compactMap { bundlePath(from: $0.scriptPath) }.first
+            let displayName = productName(fromBundlePath: resolvedBundlePath)
+                ?? scriptProjectName(fromMembers: members)
+                ?? mainProc.name
             let isProtected = members.contains { KillBlocklist.isProtected(pid: $0.pid, name: $0.name) }
 
             groups.append(ProcessGroup(
@@ -185,6 +237,55 @@ public struct ProcessGrouper {
     private func isAppBundleProcess(_ proc: ProcessInfo) -> Bool {
         guard let path = proc.execPath else { return false }
         return path.contains(".app/Contents/MacOS/")
+    }
+
+    // MARK: - Script-path display name
+
+    /// Derives a human-readable project name from the scriptPaths of an
+    /// interpreter group's members, for groups that have no .app bundle path.
+    /// Prefers the npm package name from a `node_modules/<pkg>` pattern; falls
+    /// back to the script's immediate parent directory if it isn't a generic
+    /// build/dist folder name.
+    private func scriptProjectName(fromMembers members: [ProcessInfo]) -> String? {
+        // Directories that are too generic to use as a display name. Also
+        // includes common venv/virtualenv layout names so we walk up past
+        // them to the actual project directory.
+        let genericDirs: Set<String> = [
+            "lib", "dist", "src", "bin", "out", "build", "release", "debug",
+            "venv", ".venv", "env", ".env", "virtualenv", "envs",
+            "scripts", "site-packages", "include",
+            // uv / pyenv managed interpreter paths
+            "python", "node",
+        ]
+        let scriptPaths = members.compactMap { $0.scriptPath }
+        guard !scriptPaths.isEmpty else { return nil }
+
+        for scriptPath in scriptPaths {
+            let components = scriptPath.split(separator: "/").map(String.init)
+
+            // node_modules/<package>/... pattern → use the package name
+            if let nmIdx = components.firstIndex(of: "node_modules"),
+               nmIdx + 1 < components.count {
+                let pkg = components[nmIdx + 1]
+                if pkg.hasPrefix("@"), nmIdx + 2 < components.count {
+                    return components[nmIdx + 2]
+                }
+                return pkg
+            }
+
+            // Walk up from the parent of the last path component, skipping
+            // generic directory names, until we find something meaningful.
+            // Stop before index 0 (filesystem root) and skip the username
+            // component (index 1 under /Users/).
+            for i in stride(from: components.count - 2, through: 0, by: -1) {
+                let dir = components[i]
+                // Skip the standard /Users/<name> prefix
+                if i <= 1 && (components[0] == "Users" || components[0] == "home") { continue }
+                if genericDirs.contains(dir.lowercased()) || dir.isEmpty { continue }
+                return dir
+            }
+        }
+        return nil
     }
 
     // MARK: - Bundle path helpers
