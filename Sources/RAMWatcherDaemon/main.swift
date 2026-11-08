@@ -4,60 +4,35 @@ import RAMWatcherCore
 
 // MARK: - Snapshot cache
 
-/// Thread-safe holder for the most recently sampled snapshot. The
-/// sampling loop writes to this on a 1.5s cadence; socket-server client
-/// threads read from it on every `.getSnapshot` request.
+/// Samples on demand rather than on a background timer: the full process
+/// scan + grouping is the daemon's only real cost, and it's only worth
+/// paying while a client is actually looking (the UI app polls only while
+/// its popover is open). Requests that arrive within `maxAge` of the last
+/// scan reuse it, so bursts (popover open + post-kill refresh, multiple
+/// clients) don't trigger back-to-back scans. The lock is held across the
+/// scan itself, so concurrent client threads wait for one scan instead of
+/// each running their own.
 final class SnapshotCache: @unchecked Sendable {
     private let lock = NSLock()
-    private var current: Snapshot
+    private var current: Snapshot?
+    private let maxAge: TimeInterval
+    private let sample: () -> Snapshot
 
-    init(initial: Snapshot) {
-        self.current = initial
+    init(maxAge: TimeInterval, sample: @escaping () -> Snapshot) {
+        self.maxAge = maxAge
+        self.sample = sample
     }
 
-    func get() -> Snapshot {
+    func fresh() -> Snapshot {
         lock.lock()
         defer { lock.unlock() }
-        return current
-    }
-
-    func set(_ snapshot: Snapshot) {
-        lock.lock()
-        defer { lock.unlock() }
-        current = snapshot
-    }
-}
-
-// MARK: - System memory
-
-func totalPhysicalMemoryBytes() -> UInt64 {
-    var size: UInt64 = 0
-    var len = MemoryLayout<UInt64>.size
-    let result = sysctlbyname("hw.memsize", &size, &len, nil, 0)
-    return result == 0 ? size : 0
-}
-
-/// Real system-wide used memory: active + wired + compressed pages, the
-/// same inputs Activity Monitor's pressure gauge and Stats-style menu bar
-/// tools use. Deliberately NOT the sum of per-process phys_footprint --
-/// that sum excludes wired kernel/GPU/driver memory and the compressor's
-/// own bookkeeping, which is why a per-app sum alone reads much lower
-/// than the system's actual memory pressure.
-func usedPhysicalMemoryBytes() -> UInt64 {
-    var pageSize: vm_size_t = 0
-    host_page_size(mach_host_self(), &pageSize)
-
-    var stats = vm_statistics64()
-    var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
-    let result = withUnsafeMutablePointer(to: &stats) { statsPtr -> kern_return_t in
-        statsPtr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
-            host_statistics64(mach_host_self(), HOST_VM_INFO64, intPtr, &count)
+        if let current, Date().timeIntervalSince(current.takenAt) < maxAge {
+            return current
         }
+        let snapshot = sample()
+        current = snapshot
+        return snapshot
     }
-    guard result == KERN_SUCCESS else { return 0 }
-
-    let usedPages = UInt64(stats.active_count) + UInt64(stats.wire_count) + UInt64(stats.compressor_page_count)
-    return usedPages * UInt64(pageSize)
 }
 
 // MARK: - Logging
@@ -66,7 +41,7 @@ func logLine(_ message: String) {
     FileHandle.standardError.write(("[ramwatcherd] " + message + "\n").data(using: .utf8)!)
 }
 
-// MARK: - Sampling loop
+// MARK: - Sampling
 
 let sampler = ProcessSampler()
 let grouper = ProcessGrouper()
@@ -76,23 +51,13 @@ func takeSnapshot() -> Snapshot {
     let groups = grouper.group(processes)
     return Snapshot(
         takenAt: Date(),
-        totalPhysicalMemoryBytes: totalPhysicalMemoryBytes(),
-        usedPhysicalMemoryBytes: usedPhysicalMemoryBytes(),
+        totalPhysicalMemoryBytes: SystemMemory.totalBytes(),
+        usedPhysicalMemoryBytes: SystemMemory.usedBytes(),
         groups: groups
     )
 }
 
-let cache = SnapshotCache(initial: takeSnapshot())
-
-let samplingThread = Thread {
-    while true {
-        Thread.sleep(forTimeInterval: 1.5)
-        let snapshot = takeSnapshot()
-        cache.set(snapshot)
-    }
-}
-samplingThread.name = "ramwatcherd.sampler"
-samplingThread.start()
+let cache = SnapshotCache(maxAge: 1.0, sample: takeSnapshot)
 
 // MARK: - JSON coding
 
@@ -137,11 +102,11 @@ func killPID(_ pid: Int32, name: String, signal: KillSignal) -> KillError? {
 }
 
 func handleKillProcess(pid: Int32, signal: KillSignal) -> Response {
-    // Find the process's name from the latest snapshot if we have it, so
+    // Find the process's name from a recent snapshot if we have it, so
     // the blocklist can match on name as well as pid. If the pid isn't
     // in our cached snapshot (e.g. it's brand new), fall back to an
     // empty name -- the pid-based blocklist checks (0, 1) still apply.
-    let snapshot = cache.get()
+    let snapshot = cache.fresh()
     let name = snapshot.groups
         .flatMap(\.members)
         .first(where: { $0.pid == pid })?.name ?? ""
@@ -153,7 +118,7 @@ func handleKillProcess(pid: Int32, signal: KillSignal) -> Response {
 }
 
 func handleKillGroup(mainPID: Int32, signal: KillSignal) -> Response {
-    let snapshot = cache.get()
+    let snapshot = cache.fresh()
     guard let group = snapshot.groups.first(where: { $0.mainPID == mainPID }) else {
         return .actionResult(outcome: .noSuchProcess, message: "No group found with mainPID \(mainPID)")
     }
@@ -201,7 +166,7 @@ func describe(_ failure: KillError) -> String {
 func handle(request: Request) -> Response {
     switch request {
     case .getSnapshot:
-        return .snapshot(cache.get())
+        return .snapshot(cache.fresh())
     case .killProcess(let pid, let signal):
         return handleKillProcess(pid: pid, signal: signal)
     case .killGroup(let mainPID, let signal):

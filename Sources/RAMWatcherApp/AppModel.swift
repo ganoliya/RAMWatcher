@@ -38,12 +38,17 @@ struct PendingKill: Identifiable {
     }
 }
 
-/// Main observable state for the menu bar UI. Owns the daemon connection
-/// and polls it on a fixed cadence, exposing the latest snapshot plus
-/// derived/filterable views over it to SwiftUI.
+/// Main observable state for the menu bar popover. Owns the daemon
+/// connection and polls it only while the popover is visible (see
+/// `setPopoverVisible`), exposing the latest snapshot plus derived/
+/// filterable views over it to SwiftUI. While the popover is closed the
+/// app sends nothing to the daemon, and the daemon (which samples on
+/// demand) does no work at all.
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var snapshot: Snapshot?
+    @Published private(set) var snapshot: Snapshot? {
+        didSet { recomputeFilteredGroups() }
+    }
     @Published var connectionError: String?
     /// When `connectionError` first became non-nil, so the UI can tell a
     /// brief "still starting up" blip from a daemon that's genuinely stuck
@@ -53,8 +58,18 @@ final class AppModel: ObservableObject {
     /// restart its already-running process). `nil` whenever the daemon is
     /// reachable.
     @Published private(set) var connectionErrorSince: Date?
-    @Published var filter: ProcessFilter = .userOnly
-    @Published var searchText: String = ""
+    @Published var filter: ProcessFilter = .userOnly {
+        didSet { recomputeFilteredGroups() }
+    }
+    @Published var searchText: String = "" {
+        didSet { recomputeFilteredGroups() }
+    }
+    /// The ownership filter and search text applied to the latest
+    /// snapshot's groups, sorted descending by total footprint so the
+    /// heaviest consumers are always at the top. Stored (recomputed only
+    /// when one of its inputs changes) rather than computed, since the
+    /// view reads it more than once per render.
+    @Published private(set) var filteredGroups: [ProcessGroup] = []
     @Published var lastActionMessage: String?
     /// The kill action currently awaiting user confirmation, rendered by
     /// `ContentView` as a custom overlay card.
@@ -71,6 +86,8 @@ final class AppModel: ObservableObject {
     @Published var pendingConfirmation: PendingKill?
 
     private let client: DaemonClient
+    private let meter: MemoryMeter?
+    private let pollInterval: TimeInterval
     private var pollTask: Task<Void, Never>?
     private var actionMessageClearTask: Task<Void, Never>?
 
@@ -90,16 +107,7 @@ final class AppModel: ObservableObject {
         snapshot?.usedPhysicalMemoryBytes ?? 0
     }
 
-    var systemUsedFraction: Double {
-        guard let snapshot, snapshot.totalPhysicalMemoryBytes > 0 else { return 0 }
-        return Double(snapshot.usedPhysicalMemoryBytes) / Double(snapshot.totalPhysicalMemoryBytes)
-    }
-
-    /// `model.filteredGroups`: applies the ownership filter and the search
-    /// text (case-insensitive substring match on `displayName`) to the
-    /// latest snapshot's groups, sorted descending by total footprint so
-    /// the heaviest consumers are always at the top.
-    var filteredGroups: [ProcessGroup] {
+    private func recomputeFilteredGroups() {
         var groups = snapshot?.groups ?? []
 
         switch filter {
@@ -118,12 +126,13 @@ final class AppModel: ObservableObject {
             }
         }
 
-        return groups.sorted { $0.totalFootprintBytes > $1.totalFootprintBytes }
+        filteredGroups = groups.sorted { $0.totalFootprintBytes > $1.totalFootprintBytes }
     }
 
-    init(client: DaemonClient = DaemonClient(), pollInterval: TimeInterval = 2.0) {
+    init(client: DaemonClient = DaemonClient(), meter: MemoryMeter? = nil, pollInterval: TimeInterval = 2.0) {
         self.client = client
-        startPolling(interval: pollInterval)
+        self.meter = meter
+        self.pollInterval = pollInterval
     }
 
     deinit {
@@ -131,22 +140,47 @@ final class AppModel: ObservableObject {
         actionMessageClearTask?.cancel()
     }
 
-    private func startPolling(interval: TimeInterval) {
-        pollTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                await self.refreshOnce()
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+    /// Called by `ContentView` when the popover window is shown or hidden.
+    /// Opening fetches immediately and then every `pollInterval`; closing
+    /// stops polling and drops the snapshot so its (potentially large)
+    /// process list doesn't sit in memory while nobody is looking. The
+    /// next open shows a brief loading state until the first fetch lands.
+    func setPopoverVisible(_ visible: Bool) {
+        if visible {
+            guard pollTask == nil else { return }
+            let interval = pollInterval
+            pollTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    await self.refreshOnce()
+                    try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                }
             }
+        } else {
+            pollTask?.cancel()
+            pollTask = nil
+            snapshot = nil
+            pendingConfirmation = nil
+            // Otherwise a stale error from a previous session would show
+            // instantly on the next open, and an old `connectionErrorSince`
+            // would skip the startup grace period straight to "stuck".
+            connectionError = nil
+            connectionErrorSince = nil
         }
     }
 
     private func refreshOnce() async {
         do {
             let snapshot = try await client.fetchSnapshot()
+            // A fetch that was already in flight when the popover closed
+            // shouldn't resurrect the snapshot we just dropped.
+            guard pollTask != nil else { return }
             self.snapshot = snapshot
             self.connectionError = nil
             self.connectionErrorSince = nil
+            // Keep the menu bar figure in step with the popover while it's
+            // open; it's a local syscall, so this costs nothing extra.
+            meter?.refresh()
         } catch {
             self.connectionError = error.localizedDescription
             if connectionErrorSince == nil {

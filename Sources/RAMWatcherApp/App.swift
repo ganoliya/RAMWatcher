@@ -20,6 +20,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// how every other SMAppService-based menu bar app behaves.
     let daemonInstaller = DaemonInstaller()
 
+    /// Also owned here rather than as `@StateObject`s on the `App` struct:
+    /// a `@StateObject` there makes the whole scene body (menu bar label
+    /// included) re-evaluate on every published change. Held as plain
+    /// references instead, each is observed only by the view that needs
+    /// it: the label observes `meter`, the popover observes `model`.
+    let meter: MemoryMeter
+    let model: AppModel
+
+    override init() {
+        let meter = MemoryMeter()
+        self.meter = meter
+        self.model = AppModel(meter: meter)
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         daemonInstaller.refreshStatus()
@@ -41,13 +56,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 private struct MenuBarLabel: View {
-    let fraction: Double?
+    @ObservedObject var meter: MemoryMeter
 
     var body: some View {
-        Image(nsImage: makeImage())
+        Image(nsImage: Self.image(for: meter.percent))
     }
 
-    private func makeImage() -> NSImage {
+    /// Rendered images keyed by percentage. There are at most ~102
+    /// distinct labels, so each is drawn once and reused thereafter.
+    @MainActor private static var imageCache: [Int: NSImage] = [:]
+
+    @MainActor private static func image(for percent: Int?) -> NSImage {
+        let key = percent ?? -1
+        if let cached = imageCache[key] { return cached }
+        let image = makeImage(text: percent.map { "\($0)%" } ?? "--")
+        imageCache[key] = image
+        return image
+    }
+
+    private static func makeImage(text: String) -> NSImage {
         let topFont    = NSFont.systemFont(ofSize: 7, weight: .regular)
         let bottomFont = NSFont.systemFont(ofSize: 11, weight: .bold)
         let gap: CGFloat = -1.04
@@ -57,7 +84,7 @@ private struct MenuBarLabel: View {
             attributes: [.font: topFont]
         )
         let bottom = NSAttributedString(
-            string: fraction.map { String(format: "%.0f%%", $0 * 100) } ?? "--",
+            string: text,
             attributes: [.font: bottomFont]
         )
 
@@ -68,7 +95,7 @@ private struct MenuBarLabel: View {
 
         let menuBarH: CGFloat = 22
         // In flipped: true (y=0 at top), draw(at:) places the upper-left of the
-        // bounding box at the given point — NOT the baseline. So vOffset is the
+        // bounding box at the given point, NOT the baseline. So vOffset is the
         // top-left y of "RAM", and the percentage starts immediately below it.
         let vOffset = (menuBarH - contentH) / 2
 
@@ -87,15 +114,14 @@ private struct MenuBarLabel: View {
 @main
 struct RAMWatcherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = AppModel()
 
     var body: some Scene {
         MenuBarExtra {
             ContentView()
-                .environmentObject(model)
+                .environmentObject(appDelegate.model)
                 .environmentObject(appDelegate.daemonInstaller)
         } label: {
-            MenuBarLabel(fraction: model.snapshot != nil ? model.systemUsedFraction : nil)
+            MenuBarLabel(meter: appDelegate.meter)
         }
         .menuBarExtraStyle(.window)
     }
