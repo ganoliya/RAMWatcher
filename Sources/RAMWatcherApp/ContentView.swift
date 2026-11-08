@@ -28,6 +28,8 @@ struct ContentView: View {
 
                 if model.connectionError != nil {
                     daemonNotRunningView
+                } else if model.snapshot == nil {
+                    loadingView
                 } else if model.filteredGroups.isEmpty {
                     emptyStateView
                 } else {
@@ -45,7 +47,15 @@ struct ContentView: View {
             }
         }
         .frame(width: 380, height: 480)
+        // Drives polling: the model only talks to the daemon while this
+        // popover is actually on screen.
+        .background(WindowVisibilityObserver { visible in
+            model.setPopoverVisible(visible)
+        })
         .onAppear {
+            // Fallback in case the occlusion notification lags the first
+            // open; a no-op if polling is already running.
+            model.setPopoverVisible(true)
             isSearchFieldFocused = true
         }
     }
@@ -211,6 +221,12 @@ struct ContentView: View {
         .padding(.vertical, 6)
         .background(Color.secondary.opacity(0.15))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var loadingView: some View {
+        ProgressView()
+            .controlSize(.small)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyStateView: some View {

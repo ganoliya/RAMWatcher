@@ -57,8 +57,8 @@ Reading another user's or a system process's memory, and sending it a kill signa
 The daemon ships **inside** the app bundle and registers itself at launch via Apple's `SMAppService` API (ServiceManagement framework, macOS 13+) — the modern replacement for manually installing a LaunchDaemon via a sudo script. The only user-facing step is a one-time consent click in **System Settings → General → Login Items & Extensions → Allow in the Background**; no admin password is ever typed. This requires the app to be signed with a real Apple Developer ID (ad-hoc signing is enough to run locally, but `SMAppService.register()` will not work without a Developer ID signature).
 
 - `Sources/RAMWatcherCore` — process sampling (libproc/Darwin), app grouping (PPID tree + bundle-path fallback for launchd-reparented XPC helpers), the kill blocklist, and the JSON wire protocol shared by both executables.
-- `Sources/RAMWatcherDaemon` — the embedded root daemon: samples every 1.5s, serves snapshots and kill requests over a Unix domain socket at `/var/run/ramwatcher.sock`.
-- `Sources/RAMWatcherApp` — SwiftUI menu-bar UI (`MenuBarExtra`), polls the daemon every 2s, filter/search/expand/kill controls, and `DaemonInstaller.swift` which drives `SMAppService` registration.
+- `Sources/RAMWatcherDaemon` — the embedded root daemon: samples on demand (only when the app asks), serves snapshots and kill requests over a Unix domain socket at `/var/run/ramwatcher.sock`.
+- `Sources/RAMWatcherApp` — SwiftUI menu-bar UI (`MenuBarExtra`), polls the daemon every 2s only while the popover is open, filter/search/expand/kill controls, and `DaemonInstaller.swift` which drives `SMAppService` registration.
 
 ## Grouping limitation (real, not hand-waved)
 
@@ -73,7 +73,7 @@ Helpers that stay child processes of their app (Chrome's renderers, Electron hel
 
 ## Refresh rate
 
-The daemon resamples all processes every **1.5s**; the menu bar app polls the daemon every **2s**. Worst case the number on screen is ~3.5s stale. Both are hardcoded constants in `Sources/RAMWatcherDaemon/main.swift` and `Sources/RAMWatcherApp/AppModel.swift` (`pollInterval`) — change them there if you want it snappier or want to cut sampling overhead.
+The menu bar percentage refreshes once a **minute**, read locally by the app (no daemon involved), and pauses entirely while the Mac or its display is asleep. The per-app list only refreshes while the popover is open: the app fetches as soon as you click the icon and then every **2s** until you close it. The daemon scans processes only when asked (reusing a scan under 1s old), so with the popover closed it does no work at all. The intervals live in `Sources/RAMWatcherApp/MemoryMeter.swift` (`interval`) and `Sources/RAMWatcherApp/AppModel.swift` (`pollInterval`).
 
 ## Build & install
 

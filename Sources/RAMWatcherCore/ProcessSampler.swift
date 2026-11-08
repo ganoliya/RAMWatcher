@@ -149,13 +149,21 @@ public struct ProcessSampler {
         return info.ri_phys_footprint
     }
 
-    private func getResponsiblePID(pid: Int32) -> Int32? {
-        typealias ResponsibilityFn = @convention(c) (Int32) -> Int32
+    private typealias ResponsibilityFn = @convention(c) (Int32) -> Int32
+
+    /// Resolved once per process lifetime rather than per sampled pid:
+    /// `dlsym` is a symbol-table search, and the sampler calls this for
+    /// every process on every scan.
+    private static let responsibilityFn: ResponsibilityFn? = {
         let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
         guard let sym = dlsym(RTLD_DEFAULT, "responsibility_get_pid_responsible_for_pid") else {
             return nil
         }
-        let fn = unsafeBitCast(sym, to: ResponsibilityFn.self)
+        return unsafeBitCast(sym, to: ResponsibilityFn.self)
+    }()
+
+    private func getResponsiblePID(pid: Int32) -> Int32? {
+        guard let fn = Self.responsibilityFn else { return nil }
         let responsible = fn(pid)
         if responsible > 0 && responsible != pid {
             return responsible
